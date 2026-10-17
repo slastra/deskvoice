@@ -1,0 +1,34 @@
+[project]
+name = "deskvoice"
+version = "0.1.0"
+description = "One local speech service for the Linux desktop: Kokoro/Piper voices with priorities and ducking, a wake word, and local Parakeet transcription for dictation"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "kokoro-onnx>=0.4",          # brings the CPU onnxruntime; see overrides-gpu.txt for CUDA
+    "numpy",
+    "soundfile",
+    # the listener: wake word, VAD, local speech recognition, MQTT
+    "openwakeword==0.6.0",
+    "sherpa-onnx",
+    "sherpa-onnx-core>=1.13.8",
+    "paho-mqtt>=2",
+]
+
+[project.scripts]
+deskvoice = "deskvoice.client:main"
+
+[dependency-groups]
+# The checkout's own environment runs on the GPU build (the override below
+# drops the CPU one); it runs on the CPU as well.
+dev = ["pytest", "onnxruntime-gpu>=1.20"]
+
+[tool.uv]
+# kokoro-onnx and openwakeword require the CPU `onnxruntime`. It and
+# `onnxruntime-gpu` install the same module and clobber each other, so in this
+# checkout the CPU one is overridden away. (`uv tool install` ignores this
+# table; it takes overrides-gpu.txt instead.)
+override-dependencies = ["onnxruntime ; sys_platform == 'never'"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

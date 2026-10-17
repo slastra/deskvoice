@@ -1,0 +1,71 @@
+# deskvoice configuration: copy to ~/.config/deskvoice/config.toml and change
+# what you like. Every key is optional; the values below are the defaults.
+
+[voices]
+# A Kokoro style ("af_heart", "bm_george"; `deskvoice voices` lists them) or
+# "piper:<model name>" for any Piper voice found in [piper] voice_dirs.
+assistant = "af_heart"      # the assistant channel: replies, the most urgent speech
+cue = "af_sky"              # the cue channel: notifications, short status lines
+reader = "bm_george"        # synth requests that don't name a voice
+
+[kokoro]
+model = "~/.local/share/deskvoice/models/kokoro-v1.0.onnx"    # deskvoice fetch-models puts it here
+voices = "~/.local/share/deskvoice/models/voices-v1.0.bin"
+provider = "auto"           # auto: CUDA when onnxruntime-gpu can use it, else CPU | cpu
+
+[piper]
+voice_dirs = ["/usr/share/piper-voices", "~/.local/share/piper-voices"]
+
+[speaker]
+cue_max_wait = 8.0          # a cue that can't start within this many seconds is dropped (the caller is told)
+
+[duck]
+level = 0.3                 # other apps' volume while deskvoice speaks or listens, as a fraction of their own (1 = off)
+exclude = ["speech-dispatcher"]   # application.name substrings never ducked (deskvoice's own are always skipped)
+yield_to = ""               # a JSON status file whose "fade" > 0 means another program is fading volumes: stand aside
+
+[listen]
+enabled = false             # the wake-word listener (or: deskvoice serve --listen)
+wake_model = "hey_jarvis"   # an openWakeWord built-in name, or the path to your own .onnx
+threshold = 0.5
+barge_threshold = 0.7       # while deskvoice is talking (interrupts it); 0 = ignore the mic then
+wake_prefix = '''^\s*hey[,.]?\s+jarvis\b[,.?!]*\s*'''   # stripped from the front of transcripts
+asr_model = "~/.local/share/deskvoice/models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8"
+asr_threads = 4
+target = ""                 # PipeWire source node; "" = the default mic
+start_timeout = 4.0         # seconds to wait for speech after the wake word
+end_silence = 0.8           # seconds of quiet that end a request
+max_utterance = 10.0
+clips_dir = "~/.local/share/deskvoice/wake-clips"   # trigger and near-miss clips, for retraining; "" = keep none
+
+[mqtt]
+enabled = true              # where heard requests are published (socket subscribers get them too)
+host = "localhost"
+port = 1883
+prefix = "deskvoice"        # <prefix>/heard, <prefix>/listen/state, <prefix>/listen/status, ...
+
+[dictate]
+silence = 2.5               # a voice dictation ("hey jarvis, dictate ...") ends after this much quiet
+# A voice dictation's raw text goes to this command on stdin, to clean it up
+# and deliver it. {app}, {title} come from the focused window (Hyprland, sway),
+# {paste_flag} is "--paste" (or "--dry-run" when DESKVOICE_DICTATE_DRYRUN=1).
+# It prints `<name> <json>` lines: clean, pasted, submitted, error.
+# Empty: deskvoice pastes the raw text into the focused window itself.
+finish_command = []
+
+[cues]
+backend = "builtin"         # builtin chirps | osc (an emotune-style daemon) | none
+osc = "127.0.0.1:57120"     # backend "osc": sends /emotune <name>
+[cues.names]                # event -> cue name (rename to match your daemon's recipes)
+listen = "listen"
+dictate = "dictate"
+ok = "ok"
+error = "error"
+nomatch = "nomatch"
+bye = "bye"
+
+[status.flags]
+# name = file: the status feed reports whether each file exists, and the "flag"
+# request creates or removes it, so a widget can show and toggle a mute flag
+# that another tool honours. For example:
+# notifications_quiet = "~/.local/state/my-notifier/quiet"

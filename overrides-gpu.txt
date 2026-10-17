@@ -1,0 +1,4 @@
+# uv tool install . --with onnxruntime-gpu --overrides overrides-gpu.txt
+# kokoro-onnx and openwakeword ask for the CPU onnxruntime, which would
+# overwrite the GPU build's files; this drops it.
+onnxruntime ; sys_platform == 'never'

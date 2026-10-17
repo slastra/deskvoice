@@ -1,0 +1,15 @@
+[Unit]
+Description=deskvoice: the desktop's speaker and microphone (Kokoro, Piper, wake word, Parakeet)
+After=pipewire.service wireplumber.service
+Wants=pipewire.service
+
+[Service]
+# `uv tool install .` (or a symlink to bin/deskvoice in a checkout) puts it here;
+# settings come from ~/.config/deskvoice/config.toml
+ExecStart=%h/.local/bin/deskvoice serve
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
