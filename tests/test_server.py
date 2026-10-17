@@ -202,3 +202,21 @@ def test_flags_are_reported_and_settable(tmp_path):
     assert s.snapshot()["flags"] == {"quiet": True}
     s.dispatch({"op": "flag", "name": "quiet", "on": False}, lambda m: None)
     assert not flag.exists()
+
+
+def test_watchdog_clears_a_stuck_speaking_flag():
+    import asyncio, types
+    flags = {"playing": True}
+    ducker = types.SimpleNamespace(
+        is_playing=lambda: flags["playing"],
+        playing=lambda on: flags.__setitem__("playing", on),
+        holding=lambda: False, status=lambda: {})
+    sp = Speaker(fake_render(), player=FakePlayer())        # idle: nothing is playing
+    s = Server(FakeVoices(), sp, ducker=ducker)
+
+    async def run():
+        task = asyncio.create_task(s.watch_leases())
+        await asyncio.sleep(2.6)
+        task.cancel()
+    asyncio.run(run())
+    assert flags["playing"] is False

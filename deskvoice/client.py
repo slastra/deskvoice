@@ -8,6 +8,7 @@ launcher starts with the system python in a few tens of milliseconds.
   deskvoice stop [--channel C] [--id ID]
   deskvoice voices [--engine kokoro|piper]
   deskvoice duck SECONDS         keep other audio lowered that long (0 releases)
+  deskvoice unduck               bring all ducked audio back now
   deskvoice status
   deskvoice fetch-models [--dir DIR] [--no-asr]
         download Kokoro (voices) and Parakeet (speech recognition) into
@@ -181,6 +182,7 @@ def main(argv=None):
     p.add_argument("--no-asr", action="store_true", help="voices only: skip Parakeet (~480 MB)")
     p = sub.add_parser("duck")
     p.add_argument("seconds", type=float)
+    sub.add_parser("unduck")
     args = ap.parse_args(argv)
 
     if args.cmd == "fetch-models":
@@ -199,6 +201,9 @@ def main(argv=None):
                     print(f"{v['name']:32s} {v['label']}")
         elif args.cmd == "duck":
             conn.request({"op": "duck", "seconds": args.seconds})
+        elif args.cmd == "unduck":
+            conn.request({"op": "unduck"})
+            print("restored")
         elif args.cmd == "status":
             print(json.dumps(conn.request({"op": "status"}), indent=2))
         return EXIT_OK

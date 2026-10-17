@@ -8,6 +8,7 @@ Requests (one JSON object per line; every reply echoes the request's "req"):
   {"op": "voices"}  {"op": "status"}
   {"op": "duck", "seconds"}            keep other apps' audio lowered that long; 0 releases
                                        (speech ducks by itself; this is for listening, thinking)
+  {"op": "unduck"}                     everything back now: holds cleared, ducked audio restored
   {"op": "synth", "text", "voice"?, "out"}   render a WAV to `out` (absolute) for a client
                                        that plays it itself -> {"ok", "secs", "ms"}
   {"op": "lease", "channel": "reader"} hold the reader channel on this connection: deskvoice
@@ -155,6 +156,10 @@ class Server:
             if self.ducker:
                 self.ducker.hold(float(msg.get("seconds", 0)))
             return {"ok": True, "ducking": self.ducker is not None}
+        if op == "unduck":
+            if self.ducker:
+                threading.Thread(target=self.ducker.force_restore, daemon=True).start()  # ramps take ~0.6 s
+            return {"ok": True}
         if op == "voices":
             return {"voices": self.voices.list()}
         if op == "status":
@@ -299,10 +304,22 @@ class Server:
 
     async def watch_leases(self):
         """Tell reader-lease holders to yield the moment something else speaks or
-        the mic listens, and to resume after 0.5 s of quiet."""
+        the mic listens, and to resume after 0.5 s of quiet. Also the ducker's
+        watchdog: a "speaking" flag left set while nothing has played for 2 s
+        is cleared, so a playback hiccup can't hold audio down."""
         quiet_since = None
+        stale_since = None
         while True:
             await asyncio.sleep(0.1)
+            if self.ducker:
+                if self.ducker.is_playing() and not self.speaker.speaking(tail=0.5):
+                    stale_since = stale_since or time.monotonic()
+                    if time.monotonic() - stale_since > 2:
+                        log.warning("duck: speaking flag stuck with nothing playing; clearing it")
+                        self.ducker.playing(False)
+                        stale_since = None
+                else:
+                    stale_since = None
             if self.busy():
                 quiet_since = None
                 if not self.yielding:
@@ -415,7 +432,9 @@ async def serve(cfg, path):
     ducker = None
     dc = cfg["duck"]
     if dc["level"] < 1:
-        ducker = Ducker(level=dc["level"], exclude=dc["exclude"], fading=fading_file(dc["yield_to"]))
+        from . import config as _config
+        ducker = Ducker(level=dc["level"], exclude=dc["exclude"], fading=fading_file(dc["yield_to"]),
+                        state_file=_config.STATE / "duck.json")
         speaker.on_busy = ducker.playing
         ducker.start()
         log.info("ducking other audio to %.0f%% while speaking or listening", dc["level"] * 100)

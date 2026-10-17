@@ -33,7 +33,10 @@ playing and what's listening.
   while the previous one plays.
 - **Ducking.** While deskvoice speaks or listens, other apps drop to a
   fraction of their own volume and come back exactly afterwards, even apps
-  that recreate their audio streams (browsers do).
+  that recreate their audio streams (browsers do). It can't get stuck: the
+  originals survive a crash, a stream that comes back later at the ducked
+  volume is put back, a volume you change mid-duck is respected, and
+  `deskvoice unduck` restores everything at once.
 - **A wake word** with barge-in: say it while deskvoice is talking and the
   speech stops. Requests are transcribed locally (about 0.1-0.4 s for a short
   one) and published to MQTT and to socket subscribers.
@@ -108,6 +111,7 @@ Requests may carry a `req` that the reply echoes.
 | `{"op": "synth", "text", "voice"?, "out"}` | Render a WAV to `out` for a client that plays it itself |
 | `{"op": "lease", "channel": "reader"}` | Hold the reader channel: deskvoice pushes `yield` and `resume` |
 | `{"op": "duck", "seconds"}` | Keep other audio lowered (listening, thinking); `0` releases |
+| `{"op": "unduck"}` | Bring all ducked audio back now |
 | `{"op": "dictate", "action": "start" \| "stop" \| "cancel", "save"?}` | A dictation session on the shared mic; closing the connection cancels |
 | `{"op": "transcribe", "path"}` | Transcribe a 16 kHz WAV |
 | `{"op": "subscribe"}` | Push `status` on every change, and `heard` for each request |

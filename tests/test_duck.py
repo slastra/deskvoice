@@ -147,3 +147,71 @@ def test_fading_file(tmp_path):
     assert check() is True
     f.write_text('{"fade": 0}')
     assert check() is False
+
+
+def test_a_crash_while_ducked_is_undone_on_the_next_start(tmp_path):
+    state = tmp_path / "duck.json"
+    audio, clock = FakeAudio({1: ("Firefox", 0.6, False)}), Clock()
+    d = Ducker(level=0.3, list_streams=audio.list, set_volume=audio.set, clock=clock,
+               sleep=lambda s: None, state_file=state)
+    d.playing(True)
+    d.tick()
+    assert audio.vol(1) == 0.18 and state.exists()
+    # killed here: no restore. The next run finds the file.
+    d2 = Ducker(level=0.3, list_streams=audio.list, set_volume=audio.set, clock=clock,
+                sleep=lambda s: None, state_file=state)
+    d2.restore_saved()
+    assert audio.vol(1) == 0.6 and not state.exists()
+
+
+def test_a_stream_that_comes_back_later_at_the_ducked_volume_is_put_back(tmp_path):
+    d, audio, clock = make({1: ("Firefox", 0.6, False)})
+    d.playing(True)
+    d.tick()
+    audio.streams = {}                           # the video ended: no stream at restore time
+    d.playing(False)
+    clock.t += TAIL + 0.01
+    d.tick()
+    assert d.status()["pending"] == ["firefox"]
+    clock.t += 30                                # half a minute later a new video starts...
+    audio.streams = {5: ("Firefox", 0.18, False)}   # ...at the volume PipeWire remembered
+    d.tick()
+    assert audio.vol(5) == 0.6
+
+
+def test_a_volume_you_changed_while_ducked_is_left_alone():
+    d, audio, clock = make({1: ("Firefox", 0.6, False)})
+    d.playing(True)
+    d.tick()
+    audio.set(1, 45)                             # you turned it up mid-duck
+    d.playing(False)
+    clock.t += TAIL + 0.01
+    d.tick()
+    assert audio.vol(1) == 0.45
+    clock.t += 5                                 # and the pending sweep doesn't override it either
+    d.tick()
+    assert audio.vol(1) == 0.45
+
+
+def test_a_fade_starting_mid_duck_gets_the_originals_back_first():
+    fading = {"v": False}
+    audio, clock = FakeAudio({1: ("Firefox", 0.6, False)}), Clock()
+    d = Ducker(level=0.3, list_streams=audio.list, set_volume=audio.set, fading=lambda: fading["v"],
+               clock=clock, sleep=lambda s: None)
+    d.playing(True)
+    d.tick()
+    assert audio.vol(1) == 0.18
+    fading["v"] = True                           # the presence sensor starts dimming the desk
+    d.tick()
+    assert audio.vol(1) == 0.6 and d.status()["yielding"]
+    d.tick()
+    assert audio.vol(1) == 0.6                   # and doesn't duck again while it fades
+
+
+def test_force_restore_clears_everything():
+    d, audio, clock = make({1: ("Firefox", 0.6, False)})
+    d.hold(60)
+    d.playing(True)
+    d.tick()
+    d.force_restore()
+    assert audio.vol(1) == 0.6 and not d.holding() and not d.is_playing()
