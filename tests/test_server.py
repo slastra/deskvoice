@@ -283,3 +283,23 @@ def test_shutdown_with_a_real_listener_and_a_gone_broker(tmp_path):
              types.SimpleNamespace(close=lambda: closed.append("ducker")),
              types.SimpleNamespace(close=lambda: None), str(tmp_path / "gone.sock"))
     assert closed == ["ducker"] and listener._stop.is_set()
+
+
+def test_each_op_is_logged_once(running, tmp_path, caplog):
+    import logging
+    import time as _t
+    caplog.set_level(logging.INFO, logger="deskvoice")
+    assert client.main(["say", "--voice", "af_sky", "Build passed."]) == client.EXIT_OK
+    conn = client.Connection()
+    conn.request({"op": "synth", "text": "Chapter one.", "voice": "af_heart", "out": str(tmp_path / "a.wav")})
+    conn.request({"op": "lease", "channel": "reader"})
+    conn.request({"op": "lease", "channel": "reader"})
+    conn.sock.close()
+    deadline = _t.monotonic() + 2
+    while "lease: reader released" not in caplog.messages and _t.monotonic() < deadline:
+        _t.sleep(0.02)
+    msgs = caplog.messages
+    assert msgs.count("say: cue af_sky 'Build passed.'") == 1
+    synths = [m for m in msgs if m.startswith("synth: ")]
+    assert len(synths) == 1 and synths[0].startswith("synth: af_heart 0.1s in ") and synths[0].endswith("'Chapter one.'")
+    assert msgs.count("lease: reader held") == 1 and msgs.count("lease: reader released") == 1

@@ -96,7 +96,9 @@ class Server:
         except (ConnectionError, asyncio.IncompleteReadError):
             pass
         finally:
-            self.leases.discard(notify)
+            if notify in self.leases:
+                self.leases.discard(notify)
+                log.info("lease: reader released")
             self.subscribers.discard(notify)
             session = self.sessions.pop(notify, None)
             if session and not session.done.is_set():
@@ -115,6 +117,7 @@ class Server:
             max_wait = msg.get("max_wait", self.cfg["speaker"]["cue_max_wait"] if channel == "cue" else None)
             self.speaker.say(msg["id"], text, voice, channel, final=msg.get("final", True),
                              max_wait=max_wait, notify=notify)
+            log.info("say: %s %s %r", channel, voice, text[:60])
             return None                   # "queued" comes as an event
         if op == "dictate":
             return self.dictate(msg, notify)
@@ -145,6 +148,8 @@ class Server:
         if op == "lease":
             if msg.get("channel") != "reader":
                 raise ValueError("only the reader channel can be leased")
+            if notify not in self.leases:
+                log.info("lease: reader held")
             self.leases.add(notify)
             return {"ok": True, "yield": self.yielding}
         if op == "end":
@@ -190,7 +195,9 @@ class Server:
                 import numpy as np
                 samples, rate = np.zeros(2400, dtype="float32"), 24000
             sf.write(out, samples, rate)
-            return {"ok": True, "secs": round(len(samples) / rate, 3), "ms": round((time.monotonic() - t) * 1000)}
+            secs, ms = round(len(samples) / rate, 3), round((time.monotonic() - t) * 1000)
+            log.info("synth: %s %.1fs in %d ms %r", voice, secs, ms, text[:60])
+            return {"ok": True, "secs": secs, "ms": ms}
         except (ValueError, UnknownVoice, OSError, RuntimeError) as e:
             return {"event": "error", "message": _describe(e)}
 
@@ -207,6 +214,7 @@ class Server:
                                 save=msg.get("save"))
             self.sessions[notify] = session
             self.listener.request_dictation(session)
+            log.info("dictate: start (socket)")
             return {"ok": True}
         if not session:
             raise ValueError("no dictation on this connection")
@@ -216,6 +224,7 @@ class Server:
             session.cancel.set()
         else:
             raise ValueError(f"unknown dictate action {action!r}")
+        log.info("dictate: %s (socket)", action)
         return {"ok": True}
 
     def transcribe(self, msg):
@@ -230,7 +239,9 @@ class Server:
                 audio = audio[:, 0]
             t = time.monotonic()
             text = self.listener.transcribe(audio)
-            return {"text": text, "ms": round((time.monotonic() - t) * 1000)}
+            ms = round((time.monotonic() - t) * 1000)
+            log.info("transcribe: %.1fs of audio in %d ms", len(audio) / rate, ms)
+            return {"text": text, "ms": ms}
         except (ValueError, OSError, RuntimeError) as e:
             return {"event": "error", "message": str(e)}
 
