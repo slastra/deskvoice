@@ -90,6 +90,7 @@ yourself.
 deskvoice say "Build passed."                         # a cue (waits up to 8 s behind other speech)
 deskvoice say --channel assistant "Here's the weather."
 deskvoice say --voice bm_george "A different voice."  # any Kokoro style, or piper:<model>
+echo "From a pipe." | deskvoice say --block -          # wait until it has been said
 deskvoice voices                                      # what's installed
 deskvoice stop --channel assistant                    # cut it short
 deskvoice status
@@ -100,6 +101,19 @@ won't (exit 3: dropped, unknown voice; exit 2: the service isn't running), so
 a notification hook can report honestly what it did. The client is standard
 library only and starts in a few tens of milliseconds.
 
+`deskvoice say --block` waits until the speech is over instead: exit 0 when it
+finished, 3 when it was stopped, dropped or failed. SIGTERM or SIGINT stops
+that speech and exits, and a client killed outright (SIGKILL) takes its speech
+with it. That is the contract of speech-dispatcher's generic module, so
+deskvoice can be its voice, in a module config such as
+`~/.config/speech-dispatcher/modules/deskvoice-generic.conf`:
+
+```
+GenericExecuteSynth "printf %s \'$DATA\' | deskvoice say --block --channel cue -"
+```
+
+(`deskvoice` must be on speech-dispatcher's `PATH`, or give the full path.)
+
 ## Protocol
 
 A unix socket at `$XDG_RUNTIME_DIR/deskvoice.sock`, one JSON object per line.
@@ -107,7 +121,7 @@ Requests may carry a `req` that the reply echoes.
 
 | Request | What |
 |---|---|
-| `{"op": "say", "id", "text", "voice"?, "channel"?, "final"?, "max_wait"?}` | Queue a sentence. Sentences with the same `id` are one utterance, played in order; `final: false` keeps it open for more |
+| `{"op": "say", "id", "text", "voice"?, "channel"?, "final"?, "max_wait"?, "stop_on_close"?}` | Queue a sentence. Sentences with the same `id` are one utterance, played in order; `final: false` keeps it open for more; `stop_on_close: true` stops it if the connection closes first |
 | `{"op": "end", "id"}` | That utterance is complete |
 | `{"op": "stop", "channel"?, "id"?}` | Cut speech short |
 | `{"op": "synth", "text", "voice"?, "out"}` | Render a WAV to `out` for a client that plays it itself |

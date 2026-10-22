@@ -1,10 +1,14 @@
 """deskvoice: talk to the running service. Standard library only, so the
 launcher starts with the system python in a few tens of milliseconds.
 
-  deskvoice say [--voice V] [--channel cue|assistant] [--wait S] [--json] TEXT
+  deskvoice say [--voice V] [--channel cue|assistant] [--wait S] [--block] [--json] TEXT
         Blocks until the utterance starts playing (or is dropped), then prints one
         line. Exit 0 started, 3 dropped or failed, 2 service unavailable. Playback
         carries on in the service; the caller never waits for the audio.
+        --block waits until the speech ends instead: exit 0 finished, 3 stopped,
+        dropped or failed. SIGTERM or SIGINT stops the speech and exits 128+signal,
+        and a client killed outright takes its speech with it (speech-dispatcher's
+        generic module works this way). TEXT "-" reads the text from stdin.
   deskvoice stop [--channel C] [--id ID]
   deskvoice voices [--engine kokoro|piper]
   deskvoice duck SECONDS         keep other audio lowered that long (0 releases)
@@ -18,6 +22,7 @@ launcher starts with the system python in a few tens of milliseconds.
 
 import argparse
 import json
+import signal
 import socket
 import sys
 import time
@@ -99,11 +104,15 @@ class Connection:
         self.sock.sendall(protocol.encode(msg))
 
     def recv(self, deadline):
+        """The next message; deadline None waits as long as it takes."""
         while b"\n" not in self.buf:
-            left = deadline - time.monotonic()
-            if left <= 0:
-                raise TimeoutError
-            self.sock.settimeout(left)
+            if deadline is None:
+                self.sock.settimeout(None)
+            else:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError
+                self.sock.settimeout(left)
             chunk = self.sock.recv(65536)
             if not chunk:
                 raise Unavailable("service closed the connection")
@@ -121,6 +130,16 @@ class Connection:
                 return reply
 
 
+class Interrupted(Exception):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def _interrupted(signum, frame):
+    raise Interrupted(signum)
+
+
 def say(args):
     uid = uuid.uuid4().hex
     msg = {"op": "say", "id": uid, "text": args.text, "channel": args.channel, "final": True}
@@ -128,22 +147,42 @@ def say(args):
         msg["voice"] = args.voice
     if args.wait is not None:
         msg["max_wait"] = args.wait
+    if args.block:
+        msg["stop_on_close"] = True      # killed outright (SIGKILL): the speech goes with us
     conn = Connection()
-    conn.send(msg)
-    # Render (~0.1-0.3 s) plus however long it may wait behind other speech.
-    deadline = time.monotonic() + (args.wait if args.wait is not None else protocol.DEFAULT_MAX_WAIT) + 20
-    while True:
+    previous = {}
+    try:
+        if args.block:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                previous[sig] = signal.signal(sig, _interrupted)
+        conn.send(msg)
+        # Render (~0.1-0.3 s) plus however long it may wait behind other speech.
+        deadline = time.monotonic() + (args.wait if args.wait is not None else protocol.DEFAULT_MAX_WAIT) + 20
+        while True:
+            try:
+                ev = conn.recv(deadline)
+            except TimeoutError:
+                return report(args, {"event": "error", "message": "no answer from deskvoice"}, EXIT_FAILED)
+            if ev.get("id") != uid:
+                continue
+            kind = ev.get("event")
+            if kind == "started":
+                if not args.block:
+                    return report(args, ev, EXIT_OK)
+                deadline = None           # however long it speaks
+            elif kind == "finished":
+                return report(args, ev, EXIT_OK)
+            elif kind in ("dropped", "error", "stopped"):
+                return report(args, ev, EXIT_FAILED)
+    except Interrupted as e:
         try:
-            ev = conn.recv(deadline)
-        except TimeoutError:
-            return report(args, {"event": "error", "message": "no answer from deskvoice"}, EXIT_FAILED)
-        if ev.get("id") != uid:
-            continue
-        kind = ev.get("event")
-        if kind == "started":
-            return report(args, ev, EXIT_OK)
-        if kind in ("dropped", "error", "stopped"):
-            return report(args, ev, EXIT_FAILED)
+            conn.send({"op": "stop", "id": uid})
+        except OSError:
+            pass                          # gone already; closing stops it anyway (stop_on_close)
+        return 128 + e.signum
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 def report(args, ev, code):
@@ -151,6 +190,8 @@ def report(args, ev, code):
         print(json.dumps(ev))
     elif ev.get("event") == "started":
         print(f"spoke {ev.get('secs', 0):.1f}s")
+    elif ev.get("event") == "finished":
+        print("finished")
     elif ev.get("event") == "dropped":
         print(f"dropped: {ev.get('reason', '?')}")
     else:
@@ -169,8 +210,10 @@ def main(argv=None):
     p.add_argument("--voice", default=None, help="a Kokoro style or piper:<model> (default: the channel's)")
     p.add_argument("--channel", default="cue", choices=protocol.CHANNELS)
     p.add_argument("--wait", type=float, default=None, help="seconds it may wait to start before it's dropped")
+    p.add_argument("--block", action="store_true",
+                   help="wait until the speech ends; SIGTERM or SIGINT stops it")
     p.add_argument("--json", action="store_true")
-    p.add_argument("text", nargs="+")
+    p.add_argument("text", nargs="+", help='what to say; "-" reads it from stdin')
     p = sub.add_parser("stop")
     p.add_argument("--channel", choices=protocol.CHANNELS)
     p.add_argument("--id")
@@ -189,7 +232,7 @@ def main(argv=None):
         return fetch_models(args)
     try:
         if args.cmd == "say":
-            args.text = " ".join(args.text)
+            args.text = " ".join(sys.stdin.read().split() if args.text == ["-"] else args.text)
             return say(args)
         conn = Connection()
         if args.cmd == "stop":

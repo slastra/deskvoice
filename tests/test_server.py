@@ -303,3 +303,87 @@ def test_each_op_is_logged_once(running, tmp_path, caplog):
     synths = [m for m in msgs if m.startswith("synth: ")]
     assert len(synths) == 1 and synths[0].startswith("synth: af_heart 0.1s in ") and synths[0].endswith("'Chapter one.'")
     assert msgs.count("lease: reader held") == 1 and msgs.count("lease: reader released") == 1
+
+
+def _when_playing(sp, then, timeout=3.0):
+    """Call `then` once the speaker has started playing something."""
+    import time as _t
+
+    def watch():
+        deadline = _t.monotonic() + timeout
+        while _t.monotonic() < deadline:
+            if sp.status()["playing"]:
+                then()
+                return
+            _t.sleep(0.01)
+    threading.Thread(target=watch, daemon=True).start()
+
+
+def _quiet_within(sp, seconds):
+    import time as _t
+    deadline = _t.monotonic() + seconds
+    while _t.monotonic() < deadline:
+        if sp.current is None:
+            return True
+        _t.sleep(0.01)
+    return False
+
+
+def test_cli_say_block_waits_for_the_end(running, capsys):
+    import time as _t
+    t = _t.monotonic()
+    assert client.main(["say", "--block", "Hello there.|400"]) == client.EXIT_OK
+    assert _t.monotonic() - t >= 0.35
+    assert capsys.readouterr().out.strip() == "finished"
+
+
+def test_cli_say_block_reads_stdin(running, monkeypatch, capsys):
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("Line one\nline two.|100\n"))
+    assert client.main(["say", "--block", "--channel", "cue", "-"]) == client.EXIT_OK
+    assert running.player.played[-1] == "Line one line two."
+
+
+def test_cli_say_block_dropped(running, capsys):
+    running.say("long", "Long reply.|1500", "af_heart", "assistant")
+    assert client.main(["say", "--block", "--wait", "0.2", "Too late."]) == client.EXIT_FAILED
+    assert capsys.readouterr().out.strip() == "dropped: busy"
+
+
+def test_cli_say_block_stopped_elsewhere(running, capsys):
+    _when_playing(running, lambda: running.stop(channel="cue"))
+    assert client.main(["say", "--block", "Interrupted.|3000"]) == client.EXIT_FAILED
+    assert capsys.readouterr().out.startswith("stopped")
+
+
+def test_cli_say_block_sigterm_stops_its_speech(running):
+    import signal
+    before = signal.getsignal(signal.SIGTERM)
+    _when_playing(running, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    assert client.main(["say", "--block", "A long notification.|5000"]) == 128 + signal.SIGTERM
+    assert _quiet_within(running, 1.0)
+    assert signal.getsignal(signal.SIGTERM) is before    # handlers put back
+
+
+def _wait_playing(sp, timeout=3.0):
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while not sp.status()["playing"]:
+        assert _t.monotonic() < deadline, "never started"
+        _t.sleep(0.01)
+
+
+def test_stop_on_close_stops_when_the_client_dies(running):
+    conn = client.Connection()
+    conn.send({"op": "say", "id": "k1", "text": "Killed mid sentence.|5000", "stop_on_close": True})
+    _wait_playing(running)
+    conn.sock.close()
+    assert _quiet_within(running, 1.0)
+
+
+def test_without_stop_on_close_speech_outlives_its_client(running):
+    conn = client.Connection()
+    conn.send({"op": "say", "id": "k2", "text": "Fire and forget.|1500"})
+    _wait_playing(running)
+    conn.sock.close()
+    assert not _quiet_within(running, 0.6)

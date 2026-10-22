@@ -1,8 +1,9 @@
 """deskvoice serve: the unix-socket front of the speaker and the listener.
 
 Requests (one JSON object per line; every reply echoes the request's "req"):
-  {"op": "say", "id", "text", "voice"?, "channel"?, "final": true, "max_wait"?}
-        queue a sentence; the same id streams more sentences into one utterance
+  {"op": "say", "id", "text", "voice"?, "channel"?, "final": true, "max_wait"?, "stop_on_close"?}
+        queue a sentence; the same id streams more sentences into one utterance;
+        stop_on_close: stop it if this connection closes first (a killed client)
   {"op": "end", "id"}                  that utterance is complete
   {"op": "stop", "channel"?, "id"?}    cut speech short (barge-in, cancel)
   {"op": "voices"}  {"op": "status"}
@@ -24,7 +25,8 @@ Requests (one JSON object per line; every reply echoes the request's "req"):
   {"op": "followup", "seconds"}        listen again without the wake word
   {"op": "flag", "name", "on"}         create or remove one of the configured status flag files
 Utterance events (queued, started, finished, stopped, dropped, error) go to
-the connection that sent the say, and keep playing if that connection closes.
+the connection that sent the say, and keep playing if that connection closes
+(unless the say asked for stop_on_close).
 """
 
 import argparse
@@ -55,6 +57,7 @@ class Server:
         self.yielding = False
         self.sessions = {}                # notify -> the Dictation that connection started
         self.subscribers = set()
+        self.owned = {}                   # notify -> ids of its stop_on_close utterances
         self.finishing = 0                # voice dictations being cleaned up and pasted
         self.recent = collections.deque(maxlen=8)   # heard / said / dictated, newest last
         self._recent_lock = threading.Lock()
@@ -100,6 +103,9 @@ class Server:
                 self.leases.discard(notify)
                 log.info("lease: reader released")
             self.subscribers.discard(notify)
+            for uid in self.owned.pop(notify, ()):
+                if self.speaker.stop(uid=uid):    # a no-op once it has finished
+                    log.info("say: %s stopped, its client went away", uid)
             session = self.sessions.pop(notify, None)
             if session and not session.done.is_set():
                 session.cancel.set()       # the client went away: never keep audio nobody asked for
@@ -118,6 +124,8 @@ class Server:
             self.speaker.say(msg["id"], text, voice, channel, final=msg.get("final", True),
                              max_wait=max_wait, notify=notify)
             log.info("say: %s %s %r", channel, voice, text[:60])
+            if msg.get("stop_on_close"):
+                self.owned.setdefault(notify, set()).add(msg["id"])
             return None                   # "queued" comes as an event
         if op == "dictate":
             return self.dictate(msg, notify)
