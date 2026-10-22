@@ -396,7 +396,7 @@ def listener_args(cfg):
         wake_model=lc["wake_model"], threshold=lc["threshold"], barge_threshold=lc["barge_threshold"],
         wake_prefix=lc["wake_prefix"], asr=lc["asr_model"], asr_threads=lc["asr_threads"],
         target=lc["target"] or None, start_timeout=lc["start_timeout"], end_silence=lc["end_silence"],
-        max_utterance=lc["max_utterance"], clips_dir=lc["clips_dir"],
+        max_utterance=lc["max_utterance"], clips_dir=lc["clips_dir"], presence_file=lc["presence_file"],
         mqtt_enabled=mq["enabled"], mqtt_host=mq["host"], mqtt_port=mq["port"], mqtt_prefix=mq["prefix"],
         dictate_silence=cfg["dictate"]["silence"], cues=cfg["cues"])
 

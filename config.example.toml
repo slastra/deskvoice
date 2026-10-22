@@ -37,6 +37,10 @@ start_timeout = 4.0         # seconds to wait for speech after the wake word
 end_silence = 0.8           # seconds of quiet that end a request
 max_utterance = 10.0
 clips_dir = "~/.local/share/deskvoice/wake-clips"   # trigger and near-miss clips, for retraining; "" = keep none
+# A presence sensor's JSON status file. While it is fresh (written in the last
+# 15 s) and says {"known": true, "sensor_ok": true, "present": false}, the wake
+# word is ignored (barge-in never is). Missing, stale or unreadable: wakes count.
+presence_file = ""          # e.g. "~/.local/state/<sensor>/status.json"; "" = off
 
 [mqtt]
 enabled = true              # where heard requests are published (socket subscribers get them too)

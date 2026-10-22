@@ -84,6 +84,29 @@ def fading_file(path):
     return fading
 
 
+def present_file(path, max_age=15.0):
+    """A check for a presence sensor's JSON status file: is anyone at the desk?
+    False only when the file is fresh (written in the last `max_age` seconds)
+    and says the sensor works ("sensor_ok": true), knows ("known": true), and
+    nobody is there ("present": false). Missing, stale, unreadable or
+    incomplete: True, so a broken sensor never deafens the wake word.
+    No path: always True."""
+    if not path:
+        return lambda: True
+    p = Path(path).expanduser()
+
+    def present():
+        try:
+            if time.time() - p.stat().st_mtime > max_age:
+                return True
+            data = json.loads(p.read_text())
+            return not (data.get("known") is True and data.get("sensor_ok") is True
+                        and data.get("present") is False)
+        except (OSError, ValueError, AttributeError):
+            return True
+    return present
+
+
 class Ducker:
     def __init__(self, level=0.3, exclude=(), list_streams=pactl_streams, set_volume=pactl_set,
                  fading=lambda: False, clock=time.monotonic, sleep=time.sleep, state_file=None):

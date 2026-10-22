@@ -34,6 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from .cues import Cues
+from .duck import present_file
 
 log = logging.getLogger("deskvoice")
 
@@ -321,6 +322,7 @@ class Listener:
         log.info("listen: parakeet loaded in %.1fs, wake model %s", time.monotonic() - t, Path(str(args.wake_model)).name)
         self.out = Publisher(args.mqtt_host, args.mqtt_port, args.mqtt_prefix, args.mqtt_enabled)
         self.clips = Clips(args.clips_dir) if args.clips_dir else None
+        self.present = present_file(args.presence_file)   # is anyone at the desk?
         self.mic = None
         self.state = "starting"
         self.last_wake = None                    # (score, unix time)
@@ -393,6 +395,14 @@ class Listener:
             if self.clips:
                 self.clips.observe(score, threshold, speaking)
             if score >= threshold:
+                if not speaking and not self.present():
+                    # Nobody at the desk: a video, the TV, the room. Barge-in
+                    # (deskvoice is talking) is never blocked.
+                    log.info("listen: wake %.2f ignored, nobody at the desk", score)
+                    if self.clips:
+                        self.clips.note(self.clips.trigger(score), outcome="ignored: nobody at the desk")
+                    self.wake.reset()
+                    continue
                 return score, 0.0, speaking
         raise MicGone("stopping")
 

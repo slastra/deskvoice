@@ -1,4 +1,4 @@
-from deskvoice.duck import MAX_DUCKED, TAIL, Ducker, fading_file
+from deskvoice.duck import MAX_DUCKED, TAIL, Ducker, fading_file, present_file
 
 
 class FakeAudio:
@@ -215,3 +215,34 @@ def test_force_restore_clears_everything():
     d.tick()
     d.force_restore()
     assert audio.vol(1) == 0.6 and not d.holding() and not d.is_playing()
+
+
+def test_present_file_blocks_only_a_fresh_sure_absent(tmp_path):
+    import json
+    import os
+    import time
+    f = tmp_path / "status.json"
+    present = present_file(str(f))
+
+    def write(age=0.0, **fields):
+        f.write_text(json.dumps(fields))
+        t = time.time() - age
+        os.utime(f, (t, t))
+    assert present()                                            # missing
+    write(known=True, sensor_ok=True, present=True)
+    assert present()
+    write(known=True, sensor_ok=True, present=False)
+    assert not present()                                        # the one case that blocks
+    write(age=20, known=True, sensor_ok=True, present=False)
+    assert present()                                            # stale: the sensor may be dead
+    write(known=False, sensor_ok=True, present=False)
+    assert present()
+    write(known=True, sensor_ok=False, present=False)
+    assert present()
+    write(known=True, sensor_ok=True)
+    assert present()                                            # field absent
+    f.write_text("{not json")
+    assert present()
+    f.write_text("[]")
+    assert present()
+    assert present_file("")()

@@ -71,6 +71,7 @@ def make(scores, transcript="What's up doc, turn on the office light.", speaking
     l.wake, l.wake_name, l.vad = FakeWake(scores), "w", vad or FakeVAD()
     l.asr = lambda audio: transcript
     l.out, l.clips, l.mic = FakeOut(), None, FakeMic()
+    l.present = lambda: True
     l.cues = SimpleNamespace(play=lambda name: None)
     import re as _re
     l.wake_prefix = _re.compile(r"^\s*(what'?s\s+up|sup)[,.]?\s+doc\b[,.?!]*\s*", _re.I)
@@ -238,3 +239,29 @@ def test_deliver_split_submit():
     assert split_submit("Type the password you enter.") == ("Type the password you enter.", False)
     assert split_submit("The function should return.") == ("The function should return.", False)
     assert split_submit("Enter.") == ("", True)
+
+
+def test_wake_is_ignored_while_nobody_is_at_the_desk(tmp_path, caplog):
+    import json
+    import logging
+    caplog.set_level(logging.INFO, logger="deskvoice")
+    l, events = make([0.1, 0.9, 0.1])
+    l.present = lambda: False
+    l.clips = listen.Clips(tmp_path)
+    l.mic = FakeMic(n=5)
+    try:
+        l.turn()
+        raise AssertionError("expected MicGone")
+    except listen.MicGone:
+        pass
+    assert events == [] and l.out.states == [] and l.out.heards == []
+    assert "listen: wake 0.90 ignored, nobody at the desk" in caplog.messages
+    notes = [json.loads(x) for x in (tmp_path / "clips.jsonl").read_text().splitlines()]
+    assert notes[-1]["outcome"] == "ignored: nobody at the desk" and notes[0]["kind"] == "trigger"
+
+
+def test_barge_in_is_never_blocked_by_presence():
+    l, events = make([0.7], speaking=True)
+    l.present = lambda: False
+    l.turn()
+    assert "barge" in events and l.out.heards[0]["barge"] is True

@@ -57,6 +57,9 @@ DEFAULTS = {
         "end_silence": 0.8,            # seconds of quiet that end a request
         "max_utterance": 10.0,
         "clips_dir": str(DATA / "wake-clips"),   # trigger and near-miss clips for retraining ("" = none)
+        # a presence sensor's JSON status file ({"known", "sensor_ok", "present"});
+        # wakes are ignored while a fresh one says nobody is there ("" = never)
+        "presence_file": "",
     },
     "mqtt": {
         "enabled": True,               # where heard requests go (the listener needs somewhere to send them)

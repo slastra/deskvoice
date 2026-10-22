@@ -39,7 +39,9 @@ playing and what's listening.
   `deskvoice unduck` restores everything at once.
 - **A wake word** with barge-in: say it while deskvoice is talking and the
   speech stops. Requests are transcribed locally (about 0.1-0.4 s for a short
-  one) and published to MQTT and to socket subscribers.
+  one) and published to MQTT and to socket subscribers. With a presence
+  sensor's status file configured, wakes while nobody is at the desk (a
+  video, the TV) are ignored and their clips kept for retraining.
 - **Dictation.** By hotkey: a client opens a session, sees levels and partial
   text, and gets the transcript about 0.02 s after it says stop (each phrase is
   transcribed at its pause). By voice: "hey jarvis, dictate: see you at three,
@@ -137,7 +139,8 @@ A streamed reply, from any language:
 
 `~/.config/deskvoice/config.toml`. [`config.example.toml`](config.example.toml)
 lists every key with its default and what it does: voices per channel, model
-paths, the duck level and exclusions, the wake model and thresholds, MQTT,
+paths, the duck level and exclusions, the wake model and thresholds, a
+presence sensor's status file (`[listen] presence_file`), MQTT,
 the dictation finish command, cue sounds (built in, or an OSC cue daemon),
 and status flags.
 
