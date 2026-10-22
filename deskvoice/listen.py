@@ -422,10 +422,14 @@ class Listener:
             elif speech_frames:
                 silent += 1
                 if silent >= end_silence:
-                    break
+                    if speech_frames >= 3:
+                        break
+                    # under 240 ms of speech: a cough, or the wake word's tail still
+                    # in the buffer, not the request; keep waiting for that
+                    frames, speech_frames, silent = [], 0, 0
             elif time.monotonic() - started > start_timeout:
                 return None
-        if speech_frames < 3:                     # under 240 ms of speech: a cough, not a request
+        if speech_frames < 3:
             return None
         return np.concatenate(frames)
 
@@ -557,19 +561,27 @@ class Listener:
             self.cues.play("listen")
         else:
             log.info("listen: follow-up window %.0fs", followup)
-        audio = self.record(start_timeout=followup or self.args.start_timeout)
-        if audio is None:
-            self._idle()
-            self.cues.play("bye" if followup else "nomatch")
-            log.info("listen: no speech")
-            if clip:
-                self.clips.note(clip, outcome="no speech")
-            return
-        self.state = "transcribing"
-        t = time.perf_counter()
-        raw = self.transcribe(audio)
-        asr_ms = (time.perf_counter() - t) * 1000
-        text = (self.wake_prefix.sub("", raw) if self.wake_prefix else raw).strip()
+        deadline = time.monotonic() + (followup or self.args.start_timeout)
+        while True:
+            audio = self.record(start_timeout=max(deadline - time.monotonic(), 0))
+            if audio is None:
+                self._idle()
+                self.cues.play("bye" if followup else "nomatch")
+                log.info("listen: no speech")
+                if clip:
+                    self.clips.note(clip, outcome="no speech")
+                return
+            self.state = "transcribing"
+            t = time.perf_counter()
+            raw = self.transcribe(audio)
+            asr_ms = (time.perf_counter() - t) * 1000
+            text = (self.wake_prefix.sub("", raw) if self.wake_prefix else raw).strip()
+            # Only the wake phrase (it was still in the buffer when the wake fired,
+            # then a pause): the request hasn't started, so keep the window open.
+            if text or not raw.strip() or followup or time.monotonic() >= deadline:
+                break
+            log.info("listen: heard only the wake phrase %r, still listening", raw)
+            self.state = "listening"
         log.info("listen: heard %r -> %r (%.1fs audio, %.0f ms)", raw, text, len(audio) / RATE, asr_ms)
         m = DICTATE_INTENT.match(text)
         if m and not followup:

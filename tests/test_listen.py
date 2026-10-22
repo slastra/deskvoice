@@ -160,6 +160,20 @@ class PhrasesVAD:
         return p
 
 
+def test_the_wake_words_tail_does_not_end_the_wait():
+    # 2 frames of the phrase's end still in the buffer, a pause, then the request
+    l, events = make([0.9], vad=PhrasesVAD([(2, 15), (10, 15)]))
+    l.turn()
+    assert l.out.heards[0]["text"] == "turn on the office light."
+
+
+def test_only_the_wake_phrase_keeps_listening_for_the_request():
+    l, events = make([0.9], vad=PhrasesVAD([(8, 12), (10, 12)]))
+    l.asr = ScriptedASR("What's up doc.", "turn on the office light.")
+    l.turn()
+    assert [h["text"] for h in l.out.heards] == ["turn on the office light."]
+
+
 def test_voice_dictation_is_not_sent_to_the_brain():
     # The request ("please dictate: buy milk"), then two phrases, then a long pause.
     l, events = make([0.9])
