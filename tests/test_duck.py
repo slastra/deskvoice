@@ -233,6 +233,10 @@ def test_present_file_blocks_only_a_fresh_sure_absent(tmp_path):
     assert present()
     write(known=True, sensor_ok=True, present=False)
     assert not present()                                        # the one case that blocks
+    write(known=True, sensor_ok=True, present=False, input="active")
+    assert present()                                            # typing: the radar missed someone
+    write(known=True, sensor_ok=True, present=False, input="quiet")
+    assert not present()                                        # 20 s+ without input: trust the radar
     write(age=20, known=True, sensor_ok=True, present=False)
     assert present()                                            # stale: the sensor may be dead
     write(known=False, sensor_ok=True, present=False)

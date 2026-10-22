@@ -88,8 +88,10 @@ def present_file(path, max_age=15.0):
     """A check for a presence sensor's JSON status file: is anyone at the desk?
     False only when the file is fresh (written in the last `max_age` seconds)
     and says the sensor works ("sensor_ok": true), knows ("known": true), and
-    nobody is there ("present": false). Missing, stale, unreadable or
-    incomplete: True, so a broken sensor never deafens the wake word.
+    nobody is there ("present": false), unless keyboard or mouse input is
+    live ("input": "active", deskpresence's last 20 s): the radar can miss
+    someone sitting still. Missing, stale, unreadable or incomplete: True, so
+    a broken sensor never deafens the wake word.
     No path: always True."""
     if not path:
         return lambda: True
@@ -101,7 +103,7 @@ def present_file(path, max_age=15.0):
                 return True
             data = json.loads(p.read_text())
             return not (data.get("known") is True and data.get("sensor_ok") is True
-                        and data.get("present") is False)
+                        and data.get("present") is False and data.get("input") != "active")
         except (OSError, ValueError, AttributeError):
             return True
     return present
