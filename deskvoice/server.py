@@ -24,6 +24,9 @@ Requests (one JSON object per line; every reply echoes the request's "req"):
   {"op": "mic", "enabled"}             the wake word on or off (off = no capture; remembered)
   {"op": "followup", "seconds"}        listen again without the wake word
   {"op": "flag", "name", "on"}         create or remove one of the configured status flag files
+  {"op": "voice", "channel", "voice"}  a channel's voice from now on, remembered across restarts
+                                       (state/voices.json, over [voices]); "" goes back to [voices].
+                                       Clients that leave "voice" out of a say get it.
 Utterance events (queued, started, finished, stopped, dropped, error) go to
 the connection that sent the say, and keep playing if that connection closes
 (unless the say asked for stop_on_close).
@@ -32,6 +35,7 @@ the connection that sent the say, and keep playing if that connection closes
 import argparse
 import asyncio
 import collections
+import json
 import logging
 import os
 import signal
@@ -61,6 +65,8 @@ class Server:
         self.finishing = 0                # voice dictations being cleaned up and pasted
         self.recent = collections.deque(maxlen=8)   # heard / said / dictated, newest last
         self._recent_lock = threading.Lock()
+        self.configured = dict(self.cfg["voices"])  # [voices] as written, before any pick
+        self.picks_file = None            # serve() sets it; tests leave picks in memory
 
     async def handle(self, reader, writer):
         loop = asyncio.get_running_loop()
@@ -153,6 +159,8 @@ class Server:
                 raise ValueError("the listener isn't running")
             self.listener.set_mic(bool(msg.get("enabled")))
             return {"ok": True, "mic": self.listener.mic_on.is_set()}
+        if op == "voice":
+            return self.pick_voice(msg.get("channel"), msg.get("voice") or "")
         if op == "lease":
             if msg.get("channel") != "reader":
                 raise ValueError("only the reader channel can be leased")
@@ -188,6 +196,21 @@ class Server:
             }
         raise ValueError(f"unknown op {op!r}")
 
+
+    def pick_voice(self, channel, voice):
+        if channel not in protocol.CHANNELS:
+            raise ValueError(f"channel must be one of {', '.join(protocol.CHANNELS)}")
+        voice = voice or self.configured[channel]
+        self.voices.check(voice)
+        self.cfg["voices"][channel] = voice
+        with self.speaker.cv:
+            self.speaker.voices[channel] = voice
+        picks = {ch: self.cfg["voices"][ch] for ch in protocol.CHANNELS
+                 if self.cfg["voices"][ch] != self.configured[ch]}
+        if self.picks_file:
+            save_picks(self.picks_file, picks)
+        log.info("voice: %s now %s%s", channel, voice, "" if channel in picks else " (as configured)")
+        return {"ok": True, "voices": {ch: self.cfg["voices"][ch] for ch in protocol.CHANNELS}}
 
     def synth(self, msg):
         import soundfile as sf
@@ -439,13 +462,40 @@ def start_listener(cfg, speaker, ducker, srv=None):
     return box
 
 
+def load_picks(path):
+    try:
+        picks = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return {ch: v for ch, v in picks.items() if ch in protocol.CHANNELS and isinstance(v, str) and v}
+
+
+def save_picks(path, picks):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(picks) + "\n")
+    os.replace(tmp, path)
+
+
 async def serve(cfg, path):
+    from . import config as _config
     from .duck import fading_file
     from .engines import Kokoro
+    configured = dict(cfg["voices"])
+    picks_file = _config.STATE / "voices.json"
+    picks = load_picks(picks_file)
+    cfg["voices"].update(picks)           # a voice picked over the socket (lastshell) beats [voices]
     kc = cfg["kokoro"]
     voices = Voices(Kokoro(kc["model"], kc["voices"], kc["provider"], warm_voice=cfg["voices"]["assistant"]),
                     cfg["piper"]["voice_dirs"])
     voices.load()                         # Kokoro warmed (~1 s on CUDA), then every cue is fast
+    for ch, v in picks.items():
+        try:
+            voices.check(v)
+            log.info("voice: %s is %s (picked; [voices] says %s)", ch, v, configured[ch])
+        except UnknownVoice:
+            log.warning("voice: picked %s for %s is gone; back to %s", v, ch, configured[ch])
+            cfg["voices"][ch] = configured[ch]
     speaker = Speaker(voices.render)
     speaker.voices.update({ch: cfg["voices"][ch] for ch in ("assistant", "cue")})
     ducker = None
@@ -458,6 +508,7 @@ async def serve(cfg, path):
         ducker.start()
         log.info("ducking other audio to %.0f%% while speaking or listening", dc["level"] * 100)
     srv = Server(voices, speaker, ducker, cfg=cfg)
+    srv.configured, srv.picks_file = configured, picks_file
     speaker.on_said = lambda channel, voice, text: srv.remember("said", text, channel=channel, voice=voice)
     speaker.start()
     listener_box = start_listener(cfg, speaker, ducker, srv) if cfg["listen"]["enabled"] else None

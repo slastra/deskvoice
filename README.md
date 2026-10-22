@@ -138,6 +138,7 @@ Requests may carry a `req` that the reply echoes.
 | `{"op": "mic", "enabled"}` | Wake word on or off (off closes the mic; remembered) |
 | `{"op": "followup", "seconds"}` | Listen again without the wake word |
 | `{"op": "flag", "name", "on"}` | Create or remove a configured status flag file |
+| `{"op": "voice", "channel", "voice"}` | A channel's voice from now on, kept in `~/.local/state/deskvoice/voices.json` over `[voices]`; `""` goes back to the config (`deskvoice voice CHANNEL [NAME]`) |
 | `{"op": "voices"}`, `{"op": "status"}` | What's installed; what's happening |
 
 Utterance events go to the connection that sent the `say`: `queued`,

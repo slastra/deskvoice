@@ -204,6 +204,29 @@ def test_flags_are_reported_and_settable(tmp_path):
     assert not flag.exists()
 
 
+def test_a_picked_voice_is_used_remembered_and_reset(tmp_path):
+    import json
+    from deskvoice import config, server
+    cfg = config.merge(config.load("/nonexistent"), {"voices": {"assistant": "af_heart", "cue": "af_heart"}})
+    sp = Speaker(fake_render(), player=FakePlayer())
+    s = Server(FakeVoices(), sp, cfg=cfg)
+    s.picks_file = tmp_path / "voices.json"
+    r = s.dispatch({"op": "voice", "channel": "assistant", "voice": "af_sky"}, lambda m: None)
+    assert r["voices"] == {"assistant": "af_sky", "cue": "af_heart"}
+    assert s.snapshot()["voices"]["assistant"] == "af_sky"
+    assert json.loads(s.picks_file.read_text()) == {"assistant": "af_sky"}
+    assert server.load_picks(s.picks_file) == {"assistant": "af_sky"}
+    s.dispatch({"op": "say", "id": "u1", "text": "hello", "channel": "assistant"}, lambda m: None)
+    assert sp.by_id["u1"].voice == "af_sky"            # a say without "voice" gets the pick
+    with pytest.raises(UnknownVoice):
+        s.dispatch({"op": "voice", "channel": "assistant", "voice": "zz_nobody"}, lambda m: None)
+    with pytest.raises(ValueError):
+        s.dispatch({"op": "voice", "channel": "reader", "voice": "af_sky"}, lambda m: None)
+    s.dispatch({"op": "voice", "channel": "assistant", "voice": ""}, lambda m: None)   # back to [voices]
+    assert cfg["voices"]["assistant"] == "af_heart"
+    assert json.loads(s.picks_file.read_text()) == {}
+
+
 def test_watchdog_clears_a_stuck_speaking_flag():
     import asyncio, types
     flags = {"playing": True}

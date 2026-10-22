@@ -11,6 +11,8 @@ launcher starts with the system python in a few tens of milliseconds.
         generic module works this way). TEXT "-" reads the text from stdin.
   deskvoice stop [--channel C] [--id ID]
   deskvoice voices [--engine kokoro|piper]
+  deskvoice voice CHANNEL [NAME] the voice for assistant or cue from now on (remembered;
+        no NAME = back to the config's [voices])
   deskvoice duck SECONDS         keep other audio lowered that long (0 releases)
   deskvoice unduck               bring all ducked audio back now
   deskvoice status
@@ -223,6 +225,9 @@ def main(argv=None):
     p = sub.add_parser("fetch-models")
     p.add_argument("--dir", help="where to put them (default ~/.local/share/deskvoice/models)")
     p.add_argument("--no-asr", action="store_true", help="voices only: skip Parakeet (~480 MB)")
+    p = sub.add_parser("voice")
+    p.add_argument("channel", choices=protocol.CHANNELS)
+    p.add_argument("name", nargs="?", default="", help="a Kokoro style or piper:<model>; leave out for [voices]'")
     p = sub.add_parser("duck")
     p.add_argument("seconds", type=float)
     sub.add_parser("unduck")
@@ -242,6 +247,12 @@ def main(argv=None):
             for v in conn.request({"op": "voices"})["voices"]:
                 if args.engine in (None, v["engine"]):
                     print(f"{v['name']:32s} {v['label']}")
+        elif args.cmd == "voice":
+            r = conn.request({"op": "voice", "channel": args.channel, "voice": args.name})
+            if r.get("event") == "error":
+                print(r["message"])
+                return EXIT_FAILED
+            print(f"{args.channel}: {r['voices'][args.channel]}")
         elif args.cmd == "duck":
             conn.request({"op": "duck", "seconds": args.seconds})
         elif args.cmd == "unduck":
