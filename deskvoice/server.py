@@ -462,18 +462,31 @@ async def serve(cfg, path):
     attach = asyncio.create_task(attach_listener())
     leases = asyncio.create_task(srv.watch_leases())
     status = asyncio.create_task(srv.watch_status())
-    async with server:
-        await stop.wait()
-    for task in (attach, leases, status):
-        task.cancel()
-    if srv.listener:
-        srv.listener.close()
-    speaker.close()
-    if ducker:
-        ducker.close()                    # never leave someone's music at 30%
-    voices.close()
-    if os.path.exists(path):
-        os.unlink(path)
+    try:
+        async with server:
+            await stop.wait()
+    finally:
+        for task in (attach, leases, status):
+            task.cancel()
+        shutdown(srv.listener, speaker, ducker, voices, path)
+
+
+def shutdown(listener, speaker, ducker, voices, path):
+    """Close everything, each step on its own: one that fails (the MQTT
+    goodbye with the broker gone, say) must not skip the rest, above all the
+    ducker's restore, which is what keeps someone's music from staying at 30%."""
+    def unlink():
+        if os.path.exists(path):
+            os.unlink(path)
+    steps = (("listener", listener.close if listener else None), ("speaker", speaker.close),
+             ("ducker", ducker.close if ducker else None), ("voices", voices.close), ("socket", unlink))
+    for name, step in steps:
+        if step is None:
+            continue
+        try:
+            step()
+        except Exception:
+            log.exception("shutdown: closing the %s failed; carrying on", name)
 
 
 def main(argv=None):

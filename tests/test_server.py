@@ -220,3 +220,66 @@ def test_watchdog_clears_a_stuck_speaking_flag():
         task.cancel()
     asyncio.run(run())
     assert flags["playing"] is False
+
+
+class DisconnectedMQTT:
+    """paho with the broker gone: wait_for_publish raises."""
+
+    def __init__(self):
+        self.calls = []
+
+    def publish(self, topic, payload, qos=0, retain=False):
+        import types
+
+        def wait_for_publish(timeout=None):
+            raise RuntimeError("The client is not currently connected.")
+        return types.SimpleNamespace(wait_for_publish=wait_for_publish)
+
+    def disconnect(self):
+        self.calls.append("disconnect")
+
+    def loop_stop(self):
+        self.calls.append("loop_stop")
+
+
+def test_listener_close_survives_a_disconnected_broker():
+    from deskvoice.listen import Publisher
+    out = Publisher("localhost", 1883, "deskvoice", enabled=False)
+    out.client = mqtt = DisconnectedMQTT()
+    out.close()
+    assert mqtt.calls == ["loop_stop"]
+
+
+def test_shutdown_restores_ducked_audio_even_when_a_close_fails(tmp_path):
+    """The reboot that left music ducked: the listener's close raised, and the
+    ducker's restore after it never ran."""
+    import types
+    from deskvoice.server import shutdown
+    closed = []
+
+    def failing():
+        closed.append("listener")
+        raise RuntimeError("The client is not currently connected.")
+    sock = tmp_path / "deskvoice.sock"
+    sock.touch()
+    shutdown(types.SimpleNamespace(close=failing),
+             types.SimpleNamespace(close=lambda: closed.append("speaker")),
+             types.SimpleNamespace(close=lambda: closed.append("ducker")),
+             types.SimpleNamespace(close=lambda: closed.append("voices")), str(sock))
+    assert closed == ["listener", "speaker", "ducker", "voices"]
+    assert not sock.exists()
+
+
+def test_shutdown_with_a_real_listener_and_a_gone_broker(tmp_path):
+    import types
+    from deskvoice.listen import Listener, Publisher
+    from deskvoice.server import shutdown
+    listener = object.__new__(Listener)
+    listener._stop, listener.mic = threading.Event(), None
+    listener.out = Publisher("localhost", 1883, "deskvoice", enabled=False)
+    listener.out.client = DisconnectedMQTT()
+    closed = []
+    shutdown(listener, types.SimpleNamespace(close=lambda: None),
+             types.SimpleNamespace(close=lambda: closed.append("ducker")),
+             types.SimpleNamespace(close=lambda: None), str(tmp_path / "gone.sock"))
+    assert closed == ["ducker"] and listener._stop.is_set()

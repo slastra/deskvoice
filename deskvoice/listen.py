@@ -186,9 +186,14 @@ class Publisher:
             self.client.publish(f"{self.prefix}/heard", json.dumps(payload), qos=1)
 
     def close(self):
-        if self.client:
+        if not self.client:
+            return
+        try:
             self.client.publish(f"{self.prefix}/listen/status", "offline", qos=1, retain=True).wait_for_publish(2)
             self.client.disconnect()              # clean disconnect: the broker skips the last will
+        except (RuntimeError, ValueError) as e:   # not connected: the broker's last will says offline
+            log.info("listen: mqtt offline status not sent: %s", e)
+        finally:
             self.client.loop_stop()
 
 
