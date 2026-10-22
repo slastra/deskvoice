@@ -109,10 +109,14 @@ deskvoice can be its voice, in a module config such as
 `~/.config/speech-dispatcher/modules/deskvoice-generic.conf`:
 
 ```
-GenericExecuteSynth "printf %s \'$DATA\' | deskvoice say --block --channel cue -"
+GenericExecuteSynth "printf %s \'$DATA\' | deskvoice say --block --channel cue - >/dev/null 2>&1"
 ```
 
 (`deskvoice` must be on speech-dispatcher's `PATH`, or give the full path.)
+Keep the redirect: the command inherits the module's stdout, which is its
+protocol pipe to speech-dispatcher, and the result line `say` prints there
+loses the end-of-speech event (`spd-say -w` never returns, and readers that
+wait for each sentence stall).
 
 ## Protocol
 
