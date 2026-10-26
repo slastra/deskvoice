@@ -1,8 +1,9 @@
 # deskvoice
 
-One local speech service for the Linux desktop. Everything on your machine
-that wants to speak or listen goes through it: an assistant, notification
-cues, a document reader, dictation. deskvoice keeps one set of voice models
+One local speech service for the Linux desktop: prioritized voices with ducking, a wake word, and dictation.
+
+Everything on your machine that wants to speak or listen goes through it: an
+assistant, notification cues, a document reader, dictation. deskvoice keeps one set of voice models
 warm, decides who talks when, lowers your music while it does, and gives the
 microphone to whoever needs it.
 
@@ -21,7 +22,7 @@ second of model loading, and two programs record the microphone without
 knowing about each other. deskvoice is the one place that knows what's
 playing and what's listening.
 
-## What it does
+## Features
 
 - **Fast speech.** Kokoro stays loaded (on CUDA when available), so a short
   cue starts playing in about 150-200 ms. Piper voices stay resident too.
@@ -52,7 +53,9 @@ playing and what's listening.
 - **A real mic switch.** Turn the wake word off and the microphone is closed,
   not ignored.
 
-## Requirements
+## Install
+
+### Requirements
 
 - Linux with PipeWire (`pw-play`, `pw-record`, `pactl`)
 - Python 3.11 and [uv](https://docs.astral.sh/uv/)
@@ -61,8 +64,6 @@ playing and what's listening.
 - For pasting dictation: Wayland with `wl-copy` and `wtype`
 - For the wake word's requests: an MQTT broker (mosquitto), or a client
   subscribed over the socket
-
-## Install
 
 ```sh
 git clone https://github.com/slastra/deskvoice && cd deskvoice
@@ -84,7 +85,12 @@ The wake word is off by default. Set `listen.enabled = true` (or run
 "hey jarvis", and `listen.wake_model` takes the path to a model you trained
 yourself.
 
-## Using it
+The CPU and GPU builds of onnxruntime install the same module and overwrite
+each other, so a GPU install overrides away the CPU one that kokoro-onnx and
+openWakeWord ask for (`overrides-gpu.txt`; a checkout's `uv sync` does the
+same through `[tool.uv]`).
+
+## Usage
 
 ```sh
 deskvoice say "Build passed."                         # a cue (waits up to 8 s behind other speech)
@@ -117,6 +123,15 @@ Keep the redirect: the command inherits the module's stdout, which is its
 protocol pipe to speech-dispatcher, and the result line `say` prints there
 loses the end-of-speech event (`spd-say -w` never returns, and readers that
 wait for each sentence stall).
+
+## Configuration
+
+`~/.config/deskvoice/config.toml`. [`config.example.toml`](config.example.toml)
+lists every key with its default and what it does: voices per channel, model
+paths, the duck level and exclusions, the wake model and thresholds, a
+presence sensor's status file (`[listen] presence_file`), MQTT,
+the dictation finish command, cue sounds (built in, or an OSC cue daemon),
+and status flags.
 
 ## Protocol
 
@@ -154,24 +169,20 @@ A streamed reply, from any language:
 {"op": "end", "id": "r1"}
 ```
 
-## Configuration
+## Development
 
-`~/.config/deskvoice/config.toml`. [`config.example.toml`](config.example.toml)
-lists every key with its default and what it does: voices per channel, model
-paths, the duck level and exclusions, the wake model and thresholds, a
-presence sensor's status file (`[listen] presence_file`), MQTT,
-the dictation finish command, cue sounds (built in, or an OSC cue daemon),
-and status flags.
+```sh
+uv sync
+uv run pytest
+```
 
-## Notes
+`DESKVOICE_DICTATE_DRYRUN=1` makes voice dictation clean up without pasting
+anything.
 
-- deskvoice's code is MIT licensed. The models it downloads carry their own
-  licenses: Kokoro is Apache-2.0, Parakeet is CC-BY-4.0, and openWakeWord's
-  built-in wake words are CC BY-NC-SA 4.0 (non-commercial). A wake word you
-  train yourself is yours.
-- The CPU and GPU builds of onnxruntime install the same module and overwrite
-  each other, so a GPU install overrides away the CPU one that kokoro-onnx and
-  openWakeWord ask for (`overrides-gpu.txt`; a checkout's `uv sync` does the
-  same through `[tool.uv]`).
-- Testing: `uv run pytest`. `DESKVOICE_DICTATE_DRYRUN=1` makes voice
-  dictation clean up without pasting anything.
+## License
+
+MIT © 2026 Shaun Lastra. See [LICENSE](LICENSE).
+
+The models it downloads carry their own licenses: Kokoro is Apache-2.0,
+Parakeet is CC-BY-4.0, and openWakeWord's built-in wake words are CC BY-NC-SA
+4.0 (non-commercial). A wake word you train yourself is yours.
