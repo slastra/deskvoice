@@ -87,6 +87,12 @@ def save_mic_setting(on):
 class Mic:
     """Continuous pw-record capture, delivered as 80 ms int16 frames."""
 
+    # A linked capture delivers a frame every 80 ms, silence included. When its
+    # source node goes away (deskvoice-aec restarting), pw-record neither exits
+    # nor follows the new node; it sits unlinked and silent. Treat a stall as
+    # a lost mic so the run loop reopens it (seen 2026-11-03).
+    STALL = 3.0
+
     def __init__(self, target=None):
         cmd = ["pw-record", "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16",
                "-P", "{ application.name = deskvoice }"]
@@ -109,7 +115,10 @@ class Mic:
         self.frames.put(None)
 
     def read(self):
-        frame = self.frames.get()
+        try:
+            frame = self.frames.get(timeout=self.STALL)
+        except queue.Empty:
+            raise MicGone(f"no audio for {self.STALL:.0f} s (stream unlinked?)") from None
         if frame is None:
             raise MicGone("pw-record exited")
         return frame

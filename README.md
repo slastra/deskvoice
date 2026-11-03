@@ -133,6 +133,18 @@ presence sensor's status file (`[listen] presence_file`), MQTT,
 the dictation finish command, cue sounds (built in, or an OSC cue daemon),
 and status flags.
 
+### Echo cancellation (optional)
+
+With speakers rather than a headset, whatever plays (music, videos, deskvoice
+itself) reaches the mic and the wake model. [`systemd/deskvoice-aec.conf`](systemd/deskvoice-aec.conf)
+runs PipeWire's WebRTC echo canceller as its own small PipeWire process: it
+subtracts what the default sink plays from your mic and offers the result as
+the source `deskvoice_aec`. Set `target.object` to your mic's node name, copy
+the conf to `~/.config/pipewire/` and the unit to `~/.config/systemd/user/`,
+enable `deskvoice-aec.service`, and set `[listen] target = "deskvoice_aec"`.
+It costs about 3% of one core. If the AEC restarts, the listener notices the
+silent stream within 3 s and reopens the mic.
+
 ## Protocol
 
 A unix socket at `$XDG_RUNTIME_DIR/deskvoice.sock`, one JSON object per line.

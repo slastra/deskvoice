@@ -279,3 +279,18 @@ def test_barge_in_is_never_blocked_by_presence():
     l.present = lambda: False
     l.turn()
     assert "barge" in events and l.out.heards[0]["barge"] is True
+
+
+def test_mic_stall_reads_as_mic_gone():
+    # an unlinked pw-record is alive but silent; read() must not block forever
+    import queue as _queue
+    from deskvoice.listen import Mic, MicGone
+    mic = Mic.__new__(Mic)
+    mic.frames = _queue.Queue()
+    mic.STALL = 0.05
+    try:
+        mic.read()
+    except MicGone as e:
+        assert "no audio" in str(e)
+    else:
+        raise AssertionError("read() returned without audio")
