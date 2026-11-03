@@ -1,6 +1,6 @@
 [project]
 name = "deskvoice"
-version = "0.1.0"
+version = "1.0.0"
 description = "One local speech service for the Linux desktop: Kokoro/Piper voices with priorities and ducking, a wake word, and local Parakeet transcription for dictation"
 requires-python = ">=3.11,<3.12"
 dependencies = [
