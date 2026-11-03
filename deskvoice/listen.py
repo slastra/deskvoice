@@ -87,11 +87,14 @@ def save_mic_setting(on):
 class Mic:
     """Continuous pw-record capture, delivered as 80 ms int16 frames."""
 
-    # A linked capture delivers a frame every 80 ms, silence included. When its
-    # source node goes away (deskvoice-aec restarting), pw-record neither exits
-    # nor follows the new node; it sits unlinked and silent. Treat a stall as
-    # a lost mic so the run loop reopens it (seen 2026-11-03).
+    # When its source node goes away (deskvoice-aec restarting), pw-record
+    # neither exits nor reliably follows the new node. PipeWire keeps the
+    # orphan running and feeds it exact digital zeros, which no real mic
+    # produces (there is always a noise floor, AEC or not). So a run of
+    # all-zero frames, or no frames at all, counts as a lost mic and the run
+    # loop reopens it (seen 2026-11-03).
     STALL = 3.0
+    ZERO_FRAMES = 60  # 4.8 s of 80 ms frames
 
     def __init__(self, target=None):
         cmd = ["pw-record", "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16",
@@ -101,6 +104,7 @@ class Mic:
         self.proc = subprocess.Popen(cmd + ["-"], stdout=subprocess.PIPE)
         self.frames = queue.Queue(maxsize=200)
         self.dropped = 0
+        self.zeros = 0
         threading.Thread(target=self._pump, daemon=True, name="mic").start()
 
     def _pump(self):
@@ -121,6 +125,9 @@ class Mic:
             raise MicGone(f"no audio for {self.STALL:.0f} s (stream unlinked?)") from None
         if frame is None:
             raise MicGone("pw-record exited")
+        self.zeros = 0 if frame.any() else self.zeros + 1
+        if self.zeros >= self.ZERO_FRAMES:
+            raise MicGone(f"{self.zeros * FRAME / RATE:.1f} s of digital silence (stream unlinked?)")
         return frame
 
     def drain(self):

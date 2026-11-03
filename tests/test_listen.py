@@ -294,3 +294,25 @@ def test_mic_stall_reads_as_mic_gone():
         assert "no audio" in str(e)
     else:
         raise AssertionError("read() returned without audio")
+
+
+def test_mic_digital_silence_reads_as_mic_gone():
+    # an orphaned stream is fed exact zeros; a real mic has a noise floor
+    import queue as _queue
+    from deskvoice.listen import FRAME, Mic, MicGone
+    mic = Mic.__new__(Mic)
+    mic.frames, mic.zeros, mic.ZERO_FRAMES = _queue.Queue(), 0, 3
+    quiet = np.zeros(FRAME, dtype=np.int16)
+    floor = quiet.copy()
+    floor[7] = 1
+    for f in (quiet, quiet, floor, quiet, quiet):   # a noise-floor frame resets the run
+        mic.frames.put(f)
+    for _ in range(5):
+        mic.read()
+    mic.frames.put(quiet)
+    try:
+        mic.read()
+    except MicGone as e:
+        assert "digital silence" in str(e)
+    else:
+        raise AssertionError("three zero frames in a row should read as MicGone")

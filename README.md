@@ -142,8 +142,9 @@ subtracts what the default sink plays from your mic and offers the result as
 the source `deskvoice_aec`. Set `target.object` to your mic's node name, copy
 the conf to `~/.config/pipewire/` and the unit to `~/.config/systemd/user/`,
 enable `deskvoice-aec.service`, and set `[listen] target = "deskvoice_aec"`.
-It costs about 3% of one core. If the AEC restarts, the listener notices the
-silent stream within 3 s and reopens the mic.
+It costs about 3% of one core. If the AEC restarts and leaves the listener's
+stream orphaned (fed exact digital zeros), the listener notices within 5 s and
+reopens the mic.
 
 ## Protocol
 
