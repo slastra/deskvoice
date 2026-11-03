@@ -88,7 +88,7 @@ class Mic:
     """Continuous pw-record capture, delivered as 80 ms int16 frames."""
 
     def __init__(self, target=None):
-        cmd = ["pw-record", "--rate", str(RATE), "--channels", "1", "--format", "s16",
+        cmd = ["pw-record", "--raw", "--rate", str(RATE), "--channels", "1", "--format", "s16",
                "-P", "{ application.name = deskvoice }"]
         if target:
             cmd += ["--target", target]
