@@ -410,3 +410,23 @@ def test_without_stop_on_close_speech_outlives_its_client(running):
     _wait_playing(running)
     conn.sock.close()
     assert not _quiet_within(running, 0.6)
+
+
+def test_shutdown_joins_the_listener_thread(tmp_path):
+    # the listener thread must be gone before the interpreter finalizes,
+    # or a daemon thread inside onnxruntime aborts the process
+    import threading
+    import types
+    from deskvoice.server import shutdown
+    stop = threading.Event()
+    left = threading.Event()
+
+    def loop():
+        stop.wait()
+        left.set()
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    noop = types.SimpleNamespace(close=lambda: None)
+    shutdown(types.SimpleNamespace(close=stop.set), noop, None, noop, str(tmp_path / "sock"),
+             listener_thread=t)
+    assert left.is_set() and not t.is_alive()

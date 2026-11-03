@@ -458,7 +458,8 @@ def start_listener(cfg, speaker, ducker, srv=None):
             except Exception:
                 log.exception("listen: failed; retrying in 5 s")
                 time.sleep(5)
-    threading.Thread(target=run, daemon=True, name="listener").start()
+    box["thread"] = threading.Thread(target=run, daemon=True, name="listener")
+    box["thread"].start()
     return box
 
 
@@ -538,17 +539,36 @@ async def serve(cfg, path):
     finally:
         for task in (attach, leases, status):
             task.cancel()
-        shutdown(srv.listener, speaker, ducker, voices, path)
+        shutdown(srv.listener, speaker, ducker, voices, path,
+                 listener_thread=(listener_box or {}).get("thread"))
 
 
-def shutdown(listener, speaker, ducker, voices, path):
+# How long shutdown waits for the listener thread to leave its loop. It
+# finishes the 80 ms frame in hand, then sees the stop flag.
+LISTENER_JOIN_S = 3.0
+
+
+def shutdown(listener, speaker, ducker, voices, path, listener_thread=None):
     """Close everything, each step on its own: one that fails (the MQTT
     goodbye with the broker gone, say) must not skip the rest, above all the
-    ducker's restore, which is what keeps someone's music from staying at 30%."""
+    ducker's restore, which is what keeps someone's music from staying at 30%.
+
+    The listener thread is joined, not just told to stop: it runs ONNX
+    inference every 80 ms, and if the interpreter finalizes while that
+    daemon thread is inside onnxruntime, its GIL reacquire ends in
+    pthread_exit, a forced unwind through C++ and std::terminate. Every
+    stop risked a SIGABRT and a ~930 MB core (2026-11-03)."""
     def unlink():
         if os.path.exists(path):
             os.unlink(path)
-    steps = (("listener", listener.close if listener else None), ("speaker", speaker.close),
+
+    def close_listener():
+        listener.close()
+        if listener_thread is not None:
+            listener_thread.join(LISTENER_JOIN_S)
+            if listener_thread.is_alive():
+                log.warning("shutdown: listener still running after %.0f s", LISTENER_JOIN_S)
+    steps = (("listener", close_listener if listener else None), ("speaker", speaker.close),
              ("ducker", ducker.close if ducker else None), ("voices", voices.close), ("socket", unlink))
     for name, step in steps:
         if step is None:
