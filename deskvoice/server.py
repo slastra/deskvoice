@@ -503,8 +503,12 @@ async def serve(cfg, path):
     dc = cfg["duck"]
     if dc["level"] < 1:
         from . import config as _config
+        from . import duck as _duck, stream_restore
         ducker = Ducker(level=dc["level"], exclude=dc["exclude"], fading=fading_file(dc["yield_to"]),
-                        state_file=_config.STATE / "duck.json")
+                        state_file=_config.STATE / "duck.json",
+                        repair=lambda ident, n, orig, low: stream_restore.repair(
+                            ident, n, orig, low, list_streams=_duck.pactl_streams,
+                            set_volume=_duck.pactl_set))
         speaker.on_busy = ducker.playing
         ducker.start()
         log.info("ducking other audio to %.0f%% while speaking or listening", dc["level"] * 100)

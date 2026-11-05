@@ -250,3 +250,83 @@ def test_present_file_blocks_only_a_fresh_sure_absent(tmp_path):
     f.write_text("[]")
     assert present()
     assert present_file("")()
+
+
+# --- saved volumes of apps with no stream left (stream_restore) -------------
+
+def make_repairing(streams, result="fixed", state_file=None):
+    audio, clock = FakeAudio(streams), Clock()
+    calls = []
+
+    def repair(ident, n, orig, low):
+        calls.append((ident, n, round(orig, 2), round(low, 2)))
+        return result
+    d = Ducker(level=0.3, list_streams=audio.list, set_volume=audio.set, clock=clock,
+               sleep=lambda s: None, state_file=state_file, repair=repair)
+    return d, audio, clock, calls
+
+
+def duck_then_restore(d, clock):
+    d.playing(True)
+    d.tick()
+    d.playing(False)
+    clock.t += TAIL + 0.01
+    d.tick()
+
+
+def test_an_app_gone_at_restore_has_its_saved_volume_repaired():
+    d, audio, clock, calls = make_repairing({1: ("Firefox", 0.6, False), 2: ("mpv", 0.8, False)})
+    d.playing(True)
+    d.tick()
+    del audio.streams[1]                         # the video ended while ducked
+    d.playing(False)
+    clock.t += TAIL + 0.01
+    d.tick()
+    assert calls == [({"application.name": "Firefox"}, 1, 0.6, 0.18)]
+    assert audio.vol(2) == 0.8                   # the live one came back by itself
+    assert d.status()["pending"] == []           # repaired: nothing left to watch for
+
+
+def test_a_failed_repair_falls_back_to_pending():
+    d, audio, clock, calls = make_repairing({1: ("Firefox", 0.6, False)}, result="failed")
+    d.playing(True)
+    d.tick()
+    audio.streams = {}
+    d.playing(False)
+    clock.t += TAIL + 0.01
+    d.tick()
+    assert calls and d.status()["pending"] == ["firefox"]
+
+
+def test_live_apps_are_not_repaired():
+    d, audio, clock, calls = make_repairing({1: ("Firefox", 0.6, False)})
+    duck_then_restore(d, clock)
+    assert calls == [] and audio.vol(1) == 0.6
+
+
+def test_stand_in_streams_are_never_ducked():
+    d, audio, clock, calls = make_repairing({1: ("Firefox", 0.6, False)})
+    real_list = audio.list
+
+    def with_stand_in():
+        out = real_list()
+        out.append({"index": 9, "corked": False, "volume": {"mono": {"value": 65536}},
+                    "properties": {"application.name": "Firefox", "desk.volume-proxy": "x"}})
+        return out
+    d._list = with_stand_in
+    d.playing(True)
+    d.tick()
+    # index 9 is not in the fake: a write to it would raise
+    assert d.status()["apps"] == ["firefox"] and round(d._orig["firefox"], 2) == 0.6
+
+
+def test_a_crash_with_the_app_gone_repairs_on_the_next_start(tmp_path):
+    state = tmp_path / "duck.json"
+    d, audio, clock, _ = make_repairing({1: ("Firefox", 0.6, False)}, state_file=state)
+    d.playing(True)
+    d.tick()                                     # ducked, originals and identities saved
+    audio.streams = {}                           # killed, and the video ended meanwhile
+    d2, _, _, calls = make_repairing({}, state_file=state)
+    d2._list = audio.list
+    d2.restore_saved()
+    assert calls == [({"application.name": "Firefox"}, 1, 0.6, 0.18)] and not state.exists()

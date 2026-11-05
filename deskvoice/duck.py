@@ -15,9 +15,12 @@ Audio is ducked while either wants it, and comes back exactly afterwards.
 What keeps it from getting stuck:
   - the originals are written to a state file while ducked, so a crash or a
     kill is undone on the next start (restore_saved)
-  - after a restore, each app stays "pending" for ten minutes: a stream it
-    makes later that shows up at the ducked volume (PipeWire remembering
-    the last volume written for that app) is set back to the original
+  - an app with no stream left at restore time (a video paused and torn
+    down, a sentence that ended) has the ducked volume saved in
+    WirePlumber's stream-restore; its saved volume is put right on the spot
+    through a silent stand-in stream (stream_restore.repair)
+  - if that can't be done, the app stays "pending" for ten minutes: a stream
+    it makes later that shows up at the ducked volume is set back
   - a stream whose volume someone changed while it was ducked is left as
     they set it, now and when it comes back
   - when another program starts fading the same volumes (yield_to), the duck
@@ -33,6 +36,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+from . import stream_restore
 
 log = logging.getLogger("deskvoice")
 
@@ -111,12 +116,17 @@ def present_file(path, max_age=15.0):
 
 class Ducker:
     def __init__(self, level=0.3, exclude=(), list_streams=pactl_streams, set_volume=pactl_set,
-                 fading=lambda: False, clock=time.monotonic, sleep=time.sleep, state_file=None):
+                 fading=lambda: False, clock=time.monotonic, sleep=time.sleep, state_file=None,
+                 repair=None):
         self.level = level
         self.exclude = tuple(e.lower() for e in (*ALWAYS_EXCLUDE, *exclude))
         self._list, self._set, self._fading = list_streams, set_volume, fading
         self.clock, self.sleep = clock, sleep
         self.state_file = Path(state_file) if state_file else None
+        # repair(identity, channels, original, lowest) -> "fixed"|"ok"|"kept"|"failed":
+        # puts a gone app's saved volume right. None: pending only (tests).
+        self._repair = repair
+        self._ident = {}                   # app -> (stream_restore identity, channels), while ducked
         # Two locks: _in guards what clients ask for and is never held for long;
         # _lock guards the volume work, which sleeps through ramps (~0.7 s). A
         # request must never wait on a ramp: the socket loop calls hold().
@@ -234,7 +244,8 @@ class Ducker:
         keep = []
         for s in all_:
             name = app_of(s)
-            if (s.get("corked") and not corked) or not s.get("volume") or not name or any(e in name for e in self.exclude):
+            if (s.get("corked") and not corked) or not s.get("volume") or not name or any(e in name for e in self.exclude) \
+                    or stream_restore.is_proxy(s):
                 continue
             keep.append(s)
         return keep
@@ -254,6 +265,9 @@ class Ducker:
             if pend and abs(v - pend[1]) <= SAME:
                 v = pend[0]
             self._orig.setdefault(app, v)
+            ident = stream_restore.identity(s)
+            if ident and app not in self._ident:
+                self._ident[app] = (ident, stream_restore.channels(s))
         if not self._orig:
             return
         self._save()
@@ -270,6 +284,7 @@ class Ducker:
     def _restore(self):
         if not self._orig:
             self._orig = None
+            self._ident = {}
             self._unsave()
             return
         orig = self._orig
@@ -287,13 +302,29 @@ class Ducker:
                 if v is not None and s["index"] not in touched:
                     self._set(s["index"], int(v * frac * 100 + 0.5))
             self.sleep(0.1)
-        until = self.clock() + PENDING
-        for app, v in orig.items():
-            self._pending[app] = (v, self._ducked_volume(v), until)
+        live = {app_of(s) for s in self._streams(corked=True)}
+        gone = {app: v for app, v in orig.items() if app not in live}
+        idents, self._ident = self._ident, {}
         self._orig = None
+        self._settle_gone(gone, self.level, idents)
         self._unsave()
         log.info("duck: restored %s%s", {k: round(v, 2) for k, v in orig.items()},
                  f" (left {len(touched)} stream(s) as you set them)" if touched else "")
+
+    def _settle_gone(self, gone, level, idents):
+        """Apps whose streams are gone: repair their saved volume now, or
+        failing that, watch for their next stream (pending)."""
+        until = self.clock() + PENDING
+        for app, v in gone.items():
+            ducked = int(v * level * 100 + 0.5) / 100
+            ident = idents.get(app)
+            result = self._repair(ident[0], ident[1], v, ducked) if (self._repair and ident) else "failed"
+            if result == "failed":
+                self._pending[app] = (v, ducked, until)
+            elif result == "fixed":
+                log.info("duck: %s had no stream; its saved volume is back to %.0f%%", app, v * 100)
+            elif result == "kept":
+                log.info("duck: %s had no stream; its saved volume was set by someone else, left alone", app)
 
     def _sweep_pending(self, now):
         """Streams that reappeared at the ducked volume go back to the original."""
@@ -314,7 +345,9 @@ class Ducker:
             return
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
-            self.state_file.write_text(json.dumps({"level": self.level, "orig": self._orig, "ts": time.time()}))
+            self.state_file.write_text(json.dumps({
+                "level": self.level, "orig": self._orig, "ts": time.time(),
+                "ident": {app: [i, n] for app, (i, n) in self._ident.items()}}))
         except OSError as e:
             log.warning("duck: saving the originals: %s", e)
 
@@ -330,17 +363,17 @@ class Ducker:
         try:
             saved = json.loads(self.state_file.read_text())
             orig, level = saved.get("orig") or {}, saved.get("level", self.level)
+            idents = {app: (i, n) for app, (i, n) in (saved.get("ident") or {}).items()}
         except (OSError, ValueError):
             self._unsave()
             return
-        fixed = []
+        fixed, live = [], set()
         for s in self._streams(corked=True):
             app = app_of(s)
+            live.add(app)
             if app in orig and abs(volume_of(s) - int(orig[app] * level * 100 + 0.5) / 100) <= SAME:
                 self._set(s["index"], int(orig[app] * 100 + 0.5))
                 fixed.append(app)
-        until = self.clock() + PENDING
-        for app, v in orig.items():
-            self._pending[app] = (v, int(v * level * 100 + 0.5) / 100, until)
+        self._settle_gone({a: v for a, v in orig.items() if a not in live}, level, idents)
         self._unsave()
         log.warning("duck: found a duck left by the last run; restored %s", sorted(set(fixed)) or "nothing yet (pending)")
